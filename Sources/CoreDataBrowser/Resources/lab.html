@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoreDataBrowser</title>
+  <link rel="stylesheet" href="/lab.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="12" cy="5.5" rx="8" ry="2.5"/>
+        <path d="M4 5.5v6c0 1.5 3.58 2.5 8 2.5s8-1 8-2.5v-6"/>
+        <path d="M4 11.5v6c0 1.5 3.58 2.5 8 2.5s8-1 8-2.5v-6"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <strong class="brand-name">CoreDataBrowser</strong>
+      <span class="brand-sub" id="brandSub">read-only</span>
+    </div>
+  </div>
+
+  <nav class="entity-tabs" id="entityTabs" aria-label="Open entities">
+    <!-- JS injects entity-tab buttons here -->
+  </nav>
+
+  <div class="topbar-end">
+    <span class="ctx-chip-wrap" id="ctxChipWrap" hidden>
+      <span class="ctx-chip" id="ctxChip" hidden></span>
+      <span class="ctx-select-wrap" id="ctxSelectWrap" hidden>
+        <select id="ctxSelect" class="ctx-select" aria-label="Managed object context"></select>
+      </span>
+    </span>
+    <button id="refreshBtn" type="button" class="topbar-btn" title="Refresh">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14 8a6 6 0 1 1-1.8-4.3"/>
+        <path d="M14 3v3h-3"/>
+      </svg>
+      <span>Refresh</span>
+    </button>
+    <button id="exportBtn" type="button" class="topbar-btn" disabled title="Export current record as JSON">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 2v8.5"/>
+        <path d="M4.5 7.5L8 11l3.5-3.5"/>
+        <path d="M2.5 13.5h11"/>
+      </svg>
+      <span>Export</span>
+    </button>
+  </div>
+</header>
+
+<main class="layout" id="layout">
+
+  <aside class="pane sidebar">
+    <header class="sidebar-header">
+      <label class="sidebar-search">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5"/>
+          <path d="M10.5 10.5L13.5 13.5"/>
+        </svg>
+        <input id="entityFilter" type="search" placeholder="Tables" autocomplete="off" spellcheck="false" aria-label="Filter tables">
+      </label>
+    </header>
+    <ul id="entityList" class="entity-list"></ul>
+    <footer class="sidebar-footer">
+      <span id="storeURL" class="store-url"></span>
+    </footer>
+  </aside>
+
+  <div class="splitter splitter-v" data-target="sidebar-center" role="separator" aria-orientation="vertical"></div>
+
+  <section class="pane gridPane" id="gridPane">
+    <header class="grid-header" id="gridHeader" hidden>
+      <div class="grid-actions">
+        <button class="icon-btn" id="searchBtn" type="button" title="Search" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5"/>
+            <path d="M10.5 10.5L13.5 13.5"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="filterBtn" type="button" title="Filter (coming in v1.3)" disabled>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 3h12L9.5 8.5v4l-3 1.5v-5.5z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="columnsBtn" type="button" title="Columns" aria-haspopup="menu">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="3" width="3" height="10"/>
+            <rect x="6.5" y="3" width="3" height="10"/>
+            <rect x="11" y="3" width="3" height="10"/>
+          </svg>
+        </button>
+      </div>
+      <h2 id="recordsTitle" class="grid-title">—</h2>
+      <div class="grid-end-actions">
+        <button class="icon-btn" id="refreshGridBtn" type="button" title="Refresh table">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 8a6 6 0 1 1-1.8-4.3"/>
+            <path d="M14 3v3h-3"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="closeTabBtn" type="button" title="Close tab">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="grid-search-bar" id="gridSearchBar" hidden>
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5"/>
+        <path d="M10.5 10.5L13.5 13.5"/>
+      </svg>
+      <input id="searchInput" type="search" placeholder="Search…" autocomplete="off" spellcheck="false">
+      <select id="searchAttrSel" class="gt-select gt-select-narrow" aria-label="Search attribute"></select>
+      <button class="icon-btn" id="searchCloseBtn" type="button" title="Hide search">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="grid-host" id="gridHost"></div>
+
+    <footer class="grid-footer" id="gridFooter" hidden>
+      <div class="grid-footer-left">
+        <select id="pageSize" class="page-size-select" aria-label="Page size">
+          <option>25</option>
+          <option selected>50</option>
+          <option>100</option>
+          <option>200</option>
+        </select>
+      </div>
+      <div class="grid-footer-center">
+        <span id="pageInfo">— rows</span>
+      </div>
+      <div class="grid-footer-right">
+        <button id="prevBtn" type="button" class="icon-btn" title="Previous page" aria-label="Previous page">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 3l-5 5 5 5"/>
+          </svg>
+        </button>
+        <button id="nextBtn" type="button" class="icon-btn" title="Next page" aria-label="Next page">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 3l5 5-5 5"/>
+          </svg>
+        </button>
+      </div>
+    </footer>
+  </section>
+
+  <div class="splitter splitter-v" data-target="center-detail" role="separator" aria-orientation="vertical"></div>
+
+  <aside class="pane detailPane" id="detailPane">
+    <header class="pane-header">
+      <h2 id="detailTitle">Detail</h2>
+      <span id="detailBreadcrumb" class="breadcrumb"></span>
+    </header>
+    <div id="detailBody" class="detail-body"></div>
+  </aside>
+
+</main>
+
+<footer class="statusbar">
+  <span id="status">Ready</span>
+</footer>
+
+<script src="/lab.js"></script>
+</body>
+</html>
