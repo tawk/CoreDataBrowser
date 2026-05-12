@@ -5,10 +5,12 @@ final class HTTPRouter {
 
     let server = HttpServer()
     let inspector: CoreDataInspector
+    let mutator: CoreDataMutator
     let readOnly: Bool
 
     init(inspector: CoreDataInspector, readOnly: Bool) {
         self.inspector = inspector
+        self.mutator = CoreDataMutator(inspector: inspector)
         self.readOnly = readOnly
         wire()
     }
@@ -33,15 +35,20 @@ final class HTTPRouter {
         server.GET["/api/object"] = { [weak self] req in self?.detail(req, export: false) ?? .internalServerError }
         server.GET["/api/object/export"] = { [weak self] req in self?.detail(req, export: true) ?? .internalServerError }
 
-        // Write methods — explicit 405 for clarity while read-only.
-        let blocked: (HttpRequest) -> HttpResponse = { [weak self] _ in
-            if self?.readOnly == false { return .notFound }
-            return JSONResponse.error(405, "read-only")
+        // Write methods.
+        let blocked: (HttpRequest) -> HttpResponse = { _ in
+            JSONResponse.error(405, "read-only")
         }
-        server.POST["/api/object"] = blocked
-        server.PATCH["/api/object"] = blocked
-        server.PUT["/api/object"] = blocked
-        server.DELETE["/api/object"] = blocked
+        if readOnly {
+            server.POST["/api/object"] = blocked
+            server.PATCH["/api/object"] = blocked
+            server.PUT["/api/object"] = blocked
+            server.DELETE["/api/object"] = blocked
+        } else {
+            server.PATCH["/api/object"] = { [weak self] req in self?.patch(req) ?? .internalServerError }
+            server.DELETE["/api/object"] = { [weak self] req in self?.del(req) ?? .internalServerError }
+            // POST/PUT remain unmapped — fall through to Swifter's 404.
+        }
     }
 
     // MARK: - Resources
@@ -132,6 +139,58 @@ final class HTTPRouter {
                 return JSONResponse.ok(dto, extraHeaders: extra)
             }
             return JSONResponse.ok(dto)
+        } catch let e as InspectError {
+            return JSONResponse.error(e.statusCode, e.errorDescription ?? "error")
+        } catch {
+            return JSONResponse.error(500, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Mutating handlers
+
+    private func patch(_ req: HttpRequest) -> HttpResponse {
+        let q = queryDict(req.queryParams)
+        guard let id = q["id"], !id.isEmpty else {
+            return JSONResponse.error(400, "missing `id` query param")
+        }
+        let ctx = q["ctx"]
+
+        let bodyData = Data(req.body)
+        guard !bodyData.isEmpty else {
+            return JSONResponse.error(400, "empty request body")
+        }
+        let root: Any
+        do {
+            root = try JSONSerialization.jsonObject(with: bodyData, options: [.fragmentsAllowed])
+        } catch {
+            return JSONResponse.error(400, "invalid JSON body: \(error.localizedDescription)")
+        }
+        guard let dict = root as? [String: Any] else {
+            return JSONResponse.error(400, "body must be a JSON object")
+        }
+        guard let attrs = dict["attrs"] as? [String: Any] else {
+            return JSONResponse.error(400, "body must contain an `attrs` object")
+        }
+
+        do {
+            let dto = try mutator.update(contextName: ctx, id: id, attrs: attrs)
+            return JSONResponse.ok(dto)
+        } catch let e as InspectError {
+            return JSONResponse.error(e.statusCode, e.errorDescription ?? "error")
+        } catch {
+            return JSONResponse.error(500, error.localizedDescription)
+        }
+    }
+
+    private func del(_ req: HttpRequest) -> HttpResponse {
+        let q = queryDict(req.queryParams)
+        guard let id = q["id"], !id.isEmpty else {
+            return JSONResponse.error(400, "missing `id` query param")
+        }
+        let ctx = q["ctx"]
+        do {
+            let deletedID = try mutator.delete(contextName: ctx, id: id)
+            return JSONResponse.ok(DeletedDTO(ok: true, id: deletedID))
         } catch let e as InspectError {
             return JSONResponse.error(e.statusCode, e.errorDescription ?? "error")
         } catch {

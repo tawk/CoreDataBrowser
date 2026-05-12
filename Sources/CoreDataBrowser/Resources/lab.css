@@ -841,7 +841,145 @@ body {
   cursor: pointer;
   transition: border-color 100ms ease, color 100ms ease;
 }
-.detail-toolbar .detail-export:hover { border-color: var(--accent); color: var(--accent); }
+.detail-toolbar .detail-export:hover,
+.detail-toolbar .detail-edit:hover,
+.detail-toolbar .detail-cancel:hover { border-color: var(--accent); color: var(--accent); }
+.detail-toolbar .gt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 100ms ease, color 100ms ease, background 100ms ease;
+}
+.detail-toolbar .detail-save {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.detail-toolbar .detail-save:hover { filter: brightness(1.1); }
+.detail-toolbar .btn-danger {
+  color: var(--danger);
+  border-color: var(--border);
+}
+.detail-toolbar .btn-danger:hover {
+  border-color: var(--danger);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+/* Edit-mode attribute inputs */
+.attr-rows.editing { border-left: 2px solid var(--accent); }
+.attr-v-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.attr-v-edit .attr-input {
+  flex: 1 1 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+  transition: border-color 100ms ease;
+}
+.attr-v-edit textarea.attr-input {
+  font-family: var(--sans);
+  resize: vertical;
+  min-height: 26px;
+  max-height: 220px;
+  line-height: 1.45;
+}
+.attr-v-edit input.attr-input,
+.attr-v-edit select.attr-input {
+  height: 28px;
+}
+.attr-v-edit .date-time-pair.attr-input {
+  display: inline-flex;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  flex: 1 1 100%;
+}
+.attr-v-edit .date-time-pair > input {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  height: 28px;
+  outline: none;
+  transition: border-color 100ms ease;
+}
+.attr-v-edit .date-time-pair > .date-part { flex: 0 0 auto; }
+.attr-v-edit .date-time-pair > .time-part { flex: 1 1 auto; min-width: 0; }
+.attr-v-edit .date-time-pair > input:focus { border-color: var(--accent); }
+.attr-v-edit .date-time-pair > input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.attr-v-edit .binary-input.attr-input {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  flex: 1 1 100%;
+}
+.attr-v-edit .binary-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.attr-v-edit .binary-file {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+}
+.attr-v-edit .binary-file:disabled { opacity: 0.45; cursor: not-allowed; }
+.attr-v-edit .binary-status {
+  font-size: 11px;
+  color: var(--syntax-green);
+}
+.attr-v-edit .binary-status.err { color: var(--danger); }
+.attr-v-edit .binary-hint {
+  flex-basis: 100%;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  font-style: italic;
+}
+.attr-v-edit .attr-input:focus { border-color: var(--accent); }
+.attr-v-edit .attr-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.attr-v-edit .null-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  user-select: none;
+  cursor: pointer;
+}
+.attr-v-edit .null-toggle input { margin: 0; }
+.attr-v .readonly-tag {
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  font-style: italic;
+}
 
 .detail-section-label {
   font-size: 10px;

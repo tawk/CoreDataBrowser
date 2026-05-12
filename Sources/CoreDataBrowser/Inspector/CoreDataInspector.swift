@@ -210,66 +210,70 @@ final class CoreDataInspector {
     func detail(contextName: String?, id idString: String) throws -> RecordDetailDTO {
         try perform(contextName: contextName) { ctx in
             let obj = try Self.resolveObject(idString: idString, in: ctx)
-
-            let relationships: [RelationshipValueDTO] = obj.entity.relationshipsByName.values
-                .sorted { $0.name < $1.name }
-                .map { rel in
-                    let raw = obj.value(forKey: rel.name)
-                    if rel.isToMany {
-                        let items: [NSManagedObject]
-                        if let s = raw as? Set<NSManagedObject> {
-                            items = Array(s)
-                        } else if let s = (raw as? NSOrderedSet)?.array as? [NSManagedObject] {
-                            items = s
-                        } else if let s = raw as? [NSManagedObject] {
-                            items = s
-                        } else {
-                            items = []
-                        }
-                        let sorted = items.sorted { Self.summary(for: $0) < Self.summary(for: $1) }
-                        let visible = Array(sorted.prefix(20))
-                        return RelationshipValueDTO(
-                            name: rel.name,
-                            destination: rel.destinationEntity?.name,
-                            toMany: true,
-                            count: sorted.count,
-                            items: visible.map(Self.summaryDTO(for:)),
-                            truncated: sorted.count > visible.count
-                        )
-                    } else {
-                        if let related = raw as? NSManagedObject {
-                            return RelationshipValueDTO(
-                                name: rel.name,
-                                destination: rel.destinationEntity?.name,
-                                toMany: false,
-                                count: nil,
-                                items: [Self.summaryDTO(for: related)],
-                                truncated: false
-                            )
-                        }
-                        return RelationshipValueDTO(
-                            name: rel.name,
-                            destination: rel.destinationEntity?.name,
-                            toMany: false,
-                            count: nil,
-                            items: [],
-                            truncated: false
-                        )
-                    }
-                }
-
-            return RecordDetailDTO(
-                id: obj.objectID.uriRepresentation().absoluteString,
-                entity: obj.entity.name ?? "?",
-                attrs: Self.encodedAttrs(of: obj),
-                relationships: relationships
-            )
+            return Self.makeDetailDTO(for: obj)
         }
     }
 
     // MARK: - Helpers
 
-    private static func resolveObject(idString: String, in ctx: NSManagedObjectContext) throws -> NSManagedObject {
+    /// Build a detail DTO for an already-resolved object. Must be called inside
+    /// `context.perform`. Shared by the GET handler and the mutating handlers.
+    static func makeDetailDTO(for obj: NSManagedObject) -> RecordDetailDTO {
+        let relationships: [RelationshipValueDTO] = obj.entity.relationshipsByName.values
+            .sorted { $0.name < $1.name }
+            .map { rel in
+                let raw = obj.value(forKey: rel.name)
+                if rel.isToMany {
+                    let items: [NSManagedObject]
+                    if let s = raw as? Set<NSManagedObject> {
+                        items = Array(s)
+                    } else if let s = (raw as? NSOrderedSet)?.array as? [NSManagedObject] {
+                        items = s
+                    } else if let s = raw as? [NSManagedObject] {
+                        items = s
+                    } else {
+                        items = []
+                    }
+                    let sorted = items.sorted { summary(for: $0) < summary(for: $1) }
+                    let visible = Array(sorted.prefix(20))
+                    return RelationshipValueDTO(
+                        name: rel.name,
+                        destination: rel.destinationEntity?.name,
+                        toMany: true,
+                        count: sorted.count,
+                        items: visible.map(summaryDTO(for:)),
+                        truncated: sorted.count > visible.count
+                    )
+                } else {
+                    if let related = raw as? NSManagedObject {
+                        return RelationshipValueDTO(
+                            name: rel.name,
+                            destination: rel.destinationEntity?.name,
+                            toMany: false,
+                            count: nil,
+                            items: [summaryDTO(for: related)],
+                            truncated: false
+                        )
+                    }
+                    return RelationshipValueDTO(
+                        name: rel.name,
+                        destination: rel.destinationEntity?.name,
+                        toMany: false,
+                        count: nil,
+                        items: [],
+                        truncated: false
+                    )
+                }
+            }
+        return RecordDetailDTO(
+            id: obj.objectID.uriRepresentation().absoluteString,
+            entity: obj.entity.name ?? "?",
+            attrs: encodedAttrs(of: obj),
+            relationships: relationships
+        )
+    }
+
+    static func resolveObject(idString: String, in ctx: NSManagedObjectContext) throws -> NSManagedObject {
         guard let uri = URL(string: idString),
               let coord = ctx.persistentStoreCoordinator,
               let oid = coord.managedObjectID(forURIRepresentation: uri) else {

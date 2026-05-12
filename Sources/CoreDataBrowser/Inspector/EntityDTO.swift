@@ -69,6 +69,11 @@ struct ContextDTO: Encodable {
     let isDefault: Bool
 }
 
+struct DeletedDTO: Encodable {
+    let ok: Bool
+    let id: String
+}
+
 enum JSONValue: Encodable {
     case string(String)
     case int(Int64)

@@ -6,7 +6,7 @@ A modern, drop-in Core Data inspector for iOS / iPadOS / macOS / tvOS / Mac Cata
 
 The bundled web UI: sidebar entity list with search, multi-tab open entities at the top, a center records grid with sortable / resizable / reorderable / hideable columns, and a right-side detail inspector that stacks attributes, relationships, and a content viewer. Pane sizes, column preferences, and open tabs persist in `localStorage`.
 
-- **Read-only** in v1 (CRUD planned for v2 without API breakage).
+- **Read-only by default**; opt in to edit + delete with `Options.readOnly = false`.
 - **Manual refresh** — the web UI re-queries on demand.
 - **Zero UI changes** in your app — open the URL printed at launch in any browser.
 - **Pure Swift Package**, one dependency ([Swifter](https://github.com/httpswift/swifter)).
@@ -22,7 +22,7 @@ Highlights:
 - Content viewer — pick an attribute of the selected row to read its full value.
 - Multiple `NSManagedObjectContext` support — register many in one server; the top bar shows a context switcher when there's more than one.
 - Manual refresh; pane sizes persisted across reloads.
-- Read-only in v1 (CRUD planned for v2). Writes return `405`.
+- Edit mode (opt-in): edit attribute values, delete records, upload binary blobs up to 10 MB. Relationships stay read-only. Disabled by default — writes return `405` until `Options.readOnly = false`.
 
 Routes: the UI is served at `/` (and aliased at `/lab` / `/index.html` so old links keep working).
 
@@ -125,7 +125,24 @@ let server = CoreDataBrowserServer(context: ctx, options: opts)
 |---|---|---|
 | `port` | `8080` | Preferred port. If busy, `port+1 … port+10` is tried. |
 | `bindAddress` | `.allInterfaces` | `.allInterfaces` (`0.0.0.0`) or `.loopback` (`127.0.0.1` only). |
-| `readOnly` | `true` | Reserved for v2. Always `true` in v1; writes return `405`. |
+| `readOnly` | `true` | When `true`, `PATCH`/`DELETE` return `405`. Set to `false` to enable edit + delete from the web UI (attributes only; relationships stay read-only). |
+
+### Edit mode
+
+```swift
+var opts = CoreDataBrowserServer.Options()
+opts.readOnly = false
+let server = CoreDataBrowserServer(context: ctx, options: opts)
+```
+
+When `readOnly = false`:
+
+- The brand chip in the top-left flips from `read-only` to `read/write`.
+- The detail pane gains **Edit** and **Delete** buttons. Click **Edit** to render typed inputs per attribute (textareas for strings, date + time pickers for `Date`, file picker for `Binary`, etc.), then **Save** to `PATCH` or **Cancel** to discard.
+- Binary uploads are capped at **10 MB**; oversize files are rejected client-side and re-rejected by the server. `Transformable` and `ObjectID` attributes are not editable (they're shown with a "not editable" tag).
+- Relationships are not editable from the web UI.
+- Leaving the binary file picker empty preserves the existing blob — only attributes the user actually touched are written.
+- Saves run through `validateForUpdate()` then `context.save()` on the context's own queue; validation errors come back as `400` with the underlying message.
 
 `start()` returns a `RunningInfo` with the bound `port` and every `URL` the server can be reached at. You can surface those in your app's UI — handy on physical devices when the console isn't readable.
 
@@ -166,8 +183,8 @@ For the basic case (an inbound TCP listener on a non-privileged port), **no Info
 
 - **Never ship this in production builds.** Always wrap in `#if DEBUG`.
 - The server has **no authentication**. Anyone on the same Wi-Fi can read the entire store.
-- Read-only in v1 limits damage if a build accidentally exposes the server, but assume any field can be exfiltrated.
-- For higher safety, set `bindAddress = .loopback` and forward a port from your Mac to the device/simulator when needed.
+- With `readOnly = true` (the default), assume any field can be exfiltrated. With `readOnly = false`, anyone on the LAN can also **modify or delete** records and upload arbitrary 10 MB blobs into binary attributes — only flip the switch on disposable debug data.
+- For higher safety, set `bindAddress = .loopback` and forward a port from your Mac to the device/simulator when needed. This is especially worth doing whenever `readOnly = false`.
 
 ## HTTP API
 
@@ -181,6 +198,8 @@ For the basic case (an inbound TCP listener on a non-privileged port), **no Info
 | `GET` | `/api/entities/:name?ctx=&search=&searchAttr=&sort=&order=asc\|desc&limit=&offset=` | Paginated records. |
 | `GET` | `/api/object?ctx=&id=<uri>` | Full record by `NSManagedObjectID` URI (URL-encoded). |
 | `GET` | `/api/object/export?ctx=&id=<uri>` | Same payload, served as a JSON download. |
+| `PATCH` | `/api/object?ctx=&id=<uri>` | Body `{"attrs": {<name>: <value>, ...}}`. Only listed attributes are touched; relationships and Transformable/ObjectID are refused. Binary values are base64 strings (≤ 10 MB). Returns the freshly-saved record. **Disabled unless `readOnly = false`.** |
+| `DELETE` | `/api/object?ctx=&id=<uri>` | Returns `{"ok": true, "id": "<uri>"}`. **Disabled unless `readOnly = false`.** |
 
 `ctx` is optional on every data endpoint — omit it to query the default (first-registered) context. An unknown context name returns `404 { "error": "Unknown context: <name>" }`. Other errors are JSON `{ "error": "<message>" }` with status codes `400 / 404 / 405 / 500`.
 

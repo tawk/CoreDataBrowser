@@ -604,6 +604,25 @@ const CDBDetail = (function () {
     return false;
   }
 
+  // Types we refuse to edit (matches the server's ValueDecoding refusals).
+  const READONLY_TYPES = new Set(["Transformable", "ObjectID"]);
+  function isEditableType(type) { return !READONLY_TYPES.has(type); }
+
+  const BINARY_MAX_BYTES = 10 * 1024 * 1024;
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onerror = () => reject(r.error || new Error("read failed"));
+      r.onload = () => {
+        const s = String(r.result || "");
+        const i = s.indexOf(",");
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      r.readAsDataURL(file);
+    });
+  }
+
 
   // ---- Value renderers ------------------------------------------------
 
@@ -671,6 +690,11 @@ const CDBDetail = (function () {
   // =====================================================================
   // renderDetail(detailEl, breadcrumbEl, titleEl, dto, callbacks, entity?)
   //   entity (optional): the entity schema; if absent, types are inferred.
+  //
+  //   Edit-mode flags on `callbacks`:
+  //     - writable: server allows mutation (capabilities include "write")
+  //     - editing: render input controls instead of values; swap toolbar
+  //     - onEdit / onCancelEdit / onSaveEdit / onDelete: button handlers
   // =====================================================================
   function renderDetail(detailEl, breadcrumbEl, titleEl, dto, callbacks, entity) {
     if (!dto) {
@@ -678,25 +702,42 @@ const CDBDetail = (function () {
       return;
     }
     callbacks = callbacks || {};
+    const writable = !!callbacks.writable;
+    const editing = !!callbacks.editing;
 
     titleEl.textContent = dto.entity || "Detail";
     breadcrumbEl.textContent = dto.id || "";
 
     detailEl.innerHTML = "";
 
-    // Sticky toolbar with Export
-    const toolbar = el(
-      `<div class="detail-toolbar"><button class="gt-btn detail-export" type="button">Export JSON</button></div>`
-    );
-    toolbar.querySelector(".detail-export").addEventListener("click", () => {
-      callbacks.onExport && callbacks.onExport();
-    });
+    // ---- Sticky toolbar ----
+    const toolbar = el(`<div class="detail-toolbar"></div>`);
+    if (editing) {
+      const cancel = el(`<button class="gt-btn detail-cancel" type="button">Cancel</button>`);
+      cancel.addEventListener("click", () => callbacks.onCancelEdit && callbacks.onCancelEdit());
+      const save = el(`<button class="gt-btn detail-save" type="button">Save</button>`);
+      save.addEventListener("click", () => callbacks.onSaveEdit && callbacks.onSaveEdit());
+      toolbar.appendChild(cancel);
+      toolbar.appendChild(save);
+    } else {
+      const exportBtn = el(`<button class="gt-btn detail-export" type="button">Export JSON</button>`);
+      exportBtn.addEventListener("click", () => callbacks.onExport && callbacks.onExport());
+      toolbar.appendChild(exportBtn);
+      if (writable) {
+        const edit = el(`<button class="gt-btn detail-edit" type="button">Edit</button>`);
+        edit.addEventListener("click", () => callbacks.onEdit && callbacks.onEdit());
+        const del = el(`<button class="gt-btn btn-danger detail-delete" type="button">Delete</button>`);
+        del.addEventListener("click", () => callbacks.onDelete && callbacks.onDelete());
+        toolbar.appendChild(edit);
+        toolbar.appendChild(del);
+      }
+    }
     detailEl.appendChild(toolbar);
 
     // ---- Attributes ----
     detailEl.appendChild(el(`<div class="detail-section-label">Attributes</div>`));
     const attrSection = document.createElement("div");
-    attrSection.className = "attr-rows";
+    attrSection.className = "attr-rows" + (editing ? " editing" : "");
 
     // Use schema order if available; otherwise the dto's iteration order.
     const dtoKeys = Object.keys(dto.attrs || {});
@@ -709,9 +750,13 @@ const CDBDetail = (function () {
     } else {
       attrOrder = dtoKeys.slice().sort();
     }
+    const attrSchemaMap = {};
     const attrTypeMap = {};
     if (entity && Array.isArray(entity.attributes)) {
-      for (const a of entity.attributes) attrTypeMap[a.name] = a.type;
+      for (const a of entity.attributes) {
+        attrSchemaMap[a.name] = a;
+        attrTypeMap[a.name] = a.type;
+      }
     }
 
     if (attrOrder.length === 0) {
@@ -721,12 +766,16 @@ const CDBDetail = (function () {
       for (const name of attrOrder) {
         const value = dto.attrs[name];
         const type = attrTypeMap[name] || inferType(value);
-        appendAttrRow(attrSection, name, value, type, callbacks);
+        if (editing && isEditableType(type)) {
+          appendEditableRow(attrSection, name, value, attrSchemaMap[name] || { name, type, optional: true });
+        } else {
+          appendAttrRow(attrSection, name, value, type, callbacks, editing);
+        }
       }
     }
     detailEl.appendChild(attrSection);
 
-    // ---- Relationships ----
+    // ---- Relationships (read-only; shown in both modes) ----
     const rels = dto.relationships || [];
     if (rels.length > 0) {
       detailEl.appendChild(el(`<div class="detail-section-label">Relationships</div>`));
@@ -738,8 +787,287 @@ const CDBDetail = (function () {
       detailEl.appendChild(cards);
     }
 
-    // ---- Content viewer (inline section) ----
-    appendContentSection(detailEl, dto, callbacks, entity, attrTypeMap);
+    // ---- Content viewer (hidden during edit to keep focus) ----
+    if (!editing) {
+      appendContentSection(detailEl, dto, callbacks, entity, attrTypeMap);
+    }
+  }
+
+
+  // ---- Editable attribute rows ----------------------------------------
+
+  function appendEditableRow(parent, name, value, attrSchema) {
+    const type = attrSchema.type || "";
+    const optional = !!attrSchema.optional;
+
+    const k = el(
+      `<div class="attr-k"><span class="name">${escapeHTML(name)}</span><span class="type">· ${escapeHTML(type)}</span></div>`
+    );
+    const v = document.createElement("div");
+    v.className = "attr-v attr-v-edit";
+    v.dataset.attr = name;
+    v.dataset.type = type;
+    v.dataset.optional = optional ? "1" : "0";
+
+    const isNull = (value === null || value === undefined);
+    const input = buildInputForType(type, value, isNull);
+    input.classList.add("attr-input");
+    v.appendChild(input);
+
+    // For composite inputs (e.g. date+time pair), disabling is per-child.
+    const editables = (input.tagName === "INPUT" || input.tagName === "TEXTAREA" || input.tagName === "SELECT")
+      ? [input]
+      : Array.from(input.querySelectorAll("input, textarea, select"));
+
+    if (optional) {
+      const wrap = el(`<label class="null-toggle"><input type="checkbox" class="null-cb">null</label>`);
+      const cb = wrap.querySelector("input");
+      cb.checked = isNull;
+      for (const e of editables) e.disabled = isNull;
+      cb.addEventListener("change", () => {
+        for (const e of editables) e.disabled = cb.checked;
+        if (!cb.checked && editables[0]) editables[0].focus();
+      });
+      v.appendChild(wrap);
+    }
+
+    parent.appendChild(k);
+    parent.appendChild(v);
+  }
+
+  // ISO 8601 (UTC) → { date: "YYYY-MM-DD", time: "HH:mm:ss.sss" } in local time.
+  function isoToLocalDateAndTime(iso) {
+    if (typeof iso !== "string" || iso === "") return { date: "", time: "" };
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return { date: "", time: "" };
+    const pad = (n, w) => String(n).padStart(w || 2, "0");
+    return {
+      date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
+      time: pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds())
+        + "." + pad(d.getMilliseconds(), 3),
+    };
+  }
+
+  // Local "YYYY-MM-DD" + "HH:mm[:ss[.sss]]" → ISO 8601 UTC. Returns null on parse failure.
+  function localDateTimeToISO(date, time) {
+    if (!date) return null;
+    const t = time || "00:00:00";
+    const d = new Date(date + "T" + t);
+    if (isNaN(d.getTime())) return null;
+    return d.toISOString();
+  }
+
+  function buildInputForType(type, value, isNull) {
+    // String → textarea
+    if (type === "String" || type === "") {
+      const t = document.createElement("textarea");
+      t.rows = 1;
+      t.value = isNull ? "" : (typeof value === "string" ? value : "");
+      t.spellcheck = false;
+      // Auto-grow simple heuristic
+      const sync = () => {
+        t.style.height = "auto";
+        t.style.height = Math.min(t.scrollHeight, 200) + "px";
+      };
+      requestAnimationFrame(sync);
+      t.addEventListener("input", sync);
+      return t;
+    }
+    // Bool → select
+    if (type === "Bool") {
+      const s = document.createElement("select");
+      const optTrue = new Option("true", "true");
+      const optFalse = new Option("false", "false");
+      s.add(optTrue);
+      s.add(optFalse);
+      if (!isNull) s.value = value ? "true" : "false";
+      else s.value = "true";
+      return s;
+    }
+    // Numbers
+    if (type === "Int16" || type === "Int32" || type === "Int64") {
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.step = "1";
+      inp.value = isNull ? "" : (value == null ? "" : String(value));
+      return inp;
+    }
+    if (type === "Float" || type === "Double") {
+      const inp = document.createElement("input");
+      inp.type = "number";
+      inp.step = "any";
+      inp.value = isNull ? "" : (value == null ? "" : String(value));
+      return inp;
+    }
+    if (type === "Decimal") {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.inputMode = "decimal";
+      inp.value = isNull ? "" : (value == null ? "" : String(value));
+      return inp;
+    }
+    if (type === "Date") {
+      const parts = isNull ? { date: "", time: "" } : isoToLocalDateAndTime(value);
+      const wrap = document.createElement("span");
+      wrap.className = "date-time-pair";
+      const dateInp = document.createElement("input");
+      dateInp.type = "date";
+      dateInp.className = "date-part";
+      dateInp.value = parts.date;
+      const timeInp = document.createElement("input");
+      timeInp.type = "time";
+      timeInp.step = "0.001";
+      timeInp.className = "time-part";
+      timeInp.value = parts.time;
+      wrap.appendChild(dateInp);
+      wrap.appendChild(timeInp);
+      return wrap;
+    }
+    if (type === "UUID") {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.placeholder = "00000000-0000-0000-0000-000000000000";
+      inp.value = isNull ? "" : (typeof value === "string" ? value : "");
+      return inp;
+    }
+    if (type === "URI") {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.placeholder = "https://example.com/...";
+      inp.value = isNull ? "" : (typeof value === "string" ? value : "");
+      return inp;
+    }
+    if (type === "Binary") {
+      const wrap = document.createElement("span");
+      wrap.className = "binary-input";
+      const meta = document.createElement("span");
+      meta.className = "binary-meta";
+      if (!isNull && value && typeof value === "object" && value.type === "binary") {
+        meta.textContent = "current: " + formatBytes(value.bytes);
+      } else {
+        meta.textContent = isNull ? "(null)" : "(empty)";
+      }
+      const file = document.createElement("input");
+      file.type = "file";
+      file.className = "binary-file";
+      const status = document.createElement("span");
+      status.className = "binary-status";
+      file.addEventListener("change", () => {
+        const f = file.files && file.files[0];
+        wrap._b64 = null;
+        if (!f) { status.textContent = ""; status.className = "binary-status"; return; }
+        if (f.size > BINARY_MAX_BYTES) {
+          status.textContent = "too large (max " + formatBytes(BINARY_MAX_BYTES) + ")";
+          status.className = "binary-status err";
+          file.value = "";
+          return;
+        }
+        status.textContent = "reading…";
+        status.className = "binary-status";
+        readFileAsBase64(f).then((b64) => {
+          wrap._b64 = b64;
+          status.textContent = formatBytes(f.size) + " ready";
+        }).catch(() => {
+          status.textContent = "read failed";
+          status.className = "binary-status err";
+        });
+      });
+      const hint = el(`<span class="binary-hint">leave empty to keep current</span>`);
+      wrap.appendChild(meta);
+      wrap.appendChild(file);
+      wrap.appendChild(status);
+      wrap.appendChild(hint);
+      return wrap;
+    }
+    // Fallback (unknown type — treat as text)
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.value = isNull ? "" : (value == null ? "" : String(value));
+    return inp;
+  }
+
+  // Collect the editable inputs into a typed JSON object suitable for PATCH.
+  // Throws Error with a user-facing message on malformed numeric input.
+  function collectEdits(detailEl) {
+    const out = {};
+    const rows = detailEl.querySelectorAll(".attr-v-edit");
+    for (const row of rows) {
+      const name = row.dataset.attr;
+      const type = row.dataset.type;
+      const optional = row.dataset.optional === "1";
+      const nullCb = row.querySelector(".null-cb");
+      const input = row.querySelector(".attr-input");
+      if (!input) continue;
+
+      if (optional && nullCb && nullCb.checked) {
+        out[name] = null;
+        continue;
+      }
+
+      // Binary: only include the key if a fresh file was picked. Otherwise
+      // skip — the existing blob is left untouched on the server.
+      if (type === "Binary") {
+        if (input._b64) out[name] = input._b64;
+        continue;
+      }
+
+      // Date uses a composite wrapper; collect from its two children directly.
+      if (type === "Date") {
+        const dateInp = input.querySelector(".date-part");
+        const timeInp = input.querySelector(".time-part");
+        const dStr = dateInp ? dateInp.value : "";
+        const tStr = timeInp ? timeInp.value : "";
+        if (!dStr && !tStr) {
+          if (optional) { out[name] = null; continue; }
+          throw new Error(`\`${name}\` requires a date`);
+        }
+        if (!dStr) throw new Error(`\`${name}\` is missing the date`);
+        const iso = localDateTimeToISO(dStr, tStr);
+        if (iso === null) throw new Error(`\`${name}\` is not a valid date/time`);
+        out[name] = iso;
+        continue;
+      }
+
+      const raw = input.value;
+      if (type === "String") {
+        out[name] = raw;
+      } else if (type === "Bool") {
+        out[name] = (raw === "true");
+      } else if (type === "Int16" || type === "Int32" || type === "Int64") {
+        if (raw.trim() === "") {
+          if (optional) { out[name] = null; }
+          else throw new Error(`\`${name}\` requires an integer`);
+        } else {
+          const n = Number(raw);
+          if (!Number.isFinite(n) || !Number.isInteger(n)) {
+            throw new Error(`\`${name}\` must be an integer`);
+          }
+          out[name] = n;
+        }
+      } else if (type === "Float" || type === "Double") {
+        if (raw.trim() === "") {
+          if (optional) { out[name] = null; }
+          else throw new Error(`\`${name}\` requires a number`);
+        } else {
+          const n = Number(raw);
+          if (!Number.isFinite(n)) throw new Error(`\`${name}\` must be a finite number`);
+          out[name] = n;
+        }
+      } else if (type === "Decimal") {
+        if (raw.trim() === "") {
+          if (optional) { out[name] = null; }
+          else throw new Error(`\`${name}\` requires a decimal`);
+        } else {
+          // Send as string to preserve precision; server parses with NSDecimalNumber.
+          out[name] = raw.trim();
+        }
+      } else {
+        // UUID / URI / unknown — strings
+        if (raw === "" && optional) out[name] = null;
+        else out[name] = raw;
+      }
+    }
+    return out;
   }
 
   function appendContentSection(detailEl, dto, callbacks, entity, attrTypeMap) {
@@ -806,7 +1134,7 @@ const CDBDetail = (function () {
     detailEl.appendChild(section);
   }
 
-  function appendAttrRow(parent, name, value, type, callbacks) {
+  function appendAttrRow(parent, name, value, type, callbacks, editing) {
     const k = el(
       `<div class="attr-k"><span class="name">${escapeHTML(name)}</span><span class="type">· ${escapeHTML(type)}</span></div>`
     );
@@ -819,7 +1147,11 @@ const CDBDetail = (function () {
     if (r.cls) v.classList.add(r.cls);
     v.innerHTML = r.html;
 
-    if (isLargeAttr(value)) {
+    if (editing && READONLY_TYPES.has(type)) {
+      v.appendChild(el(`<span class="readonly-tag">not editable</span>`));
+    }
+
+    if (!editing && isLargeAttr(value)) {
       const link = el(`<button type="button" class="preview-link">View in Content viewer</button>`);
       link.addEventListener("click", () => {
         callbacks.onPreviewAttr && callbacks.onPreviewAttr(name);
@@ -901,7 +1233,7 @@ const CDBDetail = (function () {
   }
 
 
-  return { renderDetail, clear };
+  return { renderDetail, clear, collectEdits };
 })();
 window.CDBDetail = CDBDetail;
 
@@ -959,8 +1291,9 @@ window.CDBDetail = CDBDetail;
     entities: [],
     openTabs: [],          // ordered list of entity names
     activeTab: null,       // currently active entity name
-    tabs: {},              // { [entityName]: { search, searchAttr, sort, order, limit, offset, records, detail, contentAttr, relName, searchOpen } }
+    tabs: {},              // { [entityName]: { search, searchAttr, sort, order, limit, offset, records, detail, contentAttr, relName, searchOpen, editing } }
     entityFilter: "",
+    writable: false,
   };
 
   function newTabState(entity) {
@@ -977,6 +1310,7 @@ window.CDBDetail = CDBDetail;
       contentAttr: lsGet(LS.contentAttr(entity ? entity.name : ""), null),
       relName: lsGet(LS.relName(entity ? entity.name : ""), null),
       searchOpen: false,
+      editing: false,
     };
   }
 
@@ -1305,6 +1639,8 @@ window.CDBDetail = CDBDetail;
       tab.detail,
       {
         _contentAttrPref: tab.contentAttr,
+        writable: state.writable,
+        editing: !!tab.editing,
         onExport: exportDetail,
         onSelectRecord: (id) => selectRecord(id),
         onPreviewAttr: (attr) => {
@@ -1316,10 +1652,91 @@ window.CDBDetail = CDBDetail;
           tab.contentAttr = name;
           if (state.activeTab) lsSet(LS.contentAttr(state.activeTab), name);
         },
+        onEdit: enterEditMode,
+        onCancelEdit: cancelEdit,
+        onSaveEdit: saveEdit,
+        onDelete: deleteRecord,
       },
       activeEntity()
     );
     els.exportBtn.disabled = false;
+  }
+
+  function enterEditMode() {
+    const tab = activeTabState();
+    if (!tab || !tab.detail || !state.writable) return;
+    tab.editing = true;
+    renderDetail();
+  }
+
+  function cancelEdit() {
+    const tab = activeTabState();
+    if (!tab) return;
+    tab.editing = false;
+    renderDetail();
+  }
+
+  async function saveEdit() {
+    const tab = activeTabState();
+    if (!tab || !tab.detail) return;
+    let payload;
+    try {
+      payload = CDBDetail.collectEdits(els.detailBody);
+    } catch (e) {
+      setStatus("error: " + e.message);
+      return;
+    }
+    setStatus("saving…");
+    try {
+      const qs = withCtx(new URLSearchParams({ id: tab.detail.id }));
+      const res = await fetch("/api/object?" + qs.toString(), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attrs: payload }),
+      });
+      const text = await res.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = { error: text || ("HTTP " + res.status) }; }
+      if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+      tab.detail = body;
+      tab.editing = false;
+      // Reflect updated values in the grid row, if loaded.
+      if (tab.records && tab.records.rows) {
+        const row = tab.records.rows.find((r) => r.id === body.id);
+        if (row) row.attrs = body.attrs;
+      }
+      renderGrid();
+      renderDetail();
+      setStatus("saved");
+    } catch (e) {
+      setStatus("error: " + e.message);
+    }
+  }
+
+  async function deleteRecord() {
+    const tab = activeTabState();
+    if (!tab || !tab.detail) return;
+    if (!window.confirm("Delete this record? This cannot be undone.")) return;
+    const deletedID = tab.detail.id;
+    setStatus("deleting…");
+    try {
+      const qs = withCtx(new URLSearchParams({ id: deletedID }));
+      const res = await fetch("/api/object?" + qs.toString(), { method: "DELETE" });
+      const text = await res.text();
+      let body;
+      try { body = JSON.parse(text); } catch { body = { error: text || ("HTTP " + res.status) }; }
+      if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+      tab.detail = null;
+      tab.editing = false;
+      clearDetail();
+      await loadRecords();
+      // Sidebar counts went stale — refresh entity list (cheap).
+      loadEntities();
+      pushURL();
+      setStatus("deleted");
+    } catch (e) {
+      setStatus("error: " + e.message);
+    }
   }
 
   function clearDetail() {
@@ -1336,6 +1753,7 @@ window.CDBDetail = CDBDetail;
       const h = await api("/api/health");
       els.storeURL.textContent = h.store || "";
       els.brandSub.textContent = h.readOnly ? "read-only" : "read/write";
+      state.writable = !h.readOnly;
       setStatus("connected");
     } catch (e) {
       setStatus("offline: " + e.message);
